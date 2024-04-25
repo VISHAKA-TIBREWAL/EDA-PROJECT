@@ -1,0 +1,326 @@
+#1. Data Loading and Libraries:
+# 1.1. Load libraries
+library(dplyr)         # For data manipulation
+library(ggplot2)       # For data visualization
+library(caret)         # For feature selection (RFE)
+library(randomForest)  # For feature importance scores
+library(outliers)      # For outlier detection and removal
+library(stats)         # For PCA functionality
+library(reshape2)      # For data transformation
+library(cluster)       # For k-means clusteringCO
+library(fpc)           # For additional functionality
+
+# 1.2. Read your data 
+df <- read.csv("heart disease dataset.csv")
+print(colnames(df)) # View the column names of the data
+head(df) # View the first few rows of the data
+
+#Summary Statistics of the Data
+summary(df)
+
+
+#2. Data Cleaning (Before Manipulation):
+
+# Check for missing values
+missing_values <- is.na(df)  # Creates a logical vector with TRUE/FALSE for missing values
+sum(missing_values)  # Counts the total number of missing values across all variables
+
+#no missing values in the dataset (based on sum(missing_values) output )
+
+
+#3. Data Preprocessing:
+# Convert categorical variables to factors
+df$sex <- factor(df$sex)
+df$cp <- factor(df$cp)
+df$slope <- factor(df$slope)
+df$ca <- factor(df$ca)
+df$thal <- factor(df$thal)
+
+# Scale/normalize numerical features
+df[, c("age", "trestbps", "chol", "thalach", "oldpeak")] <- scale(df[, c("age", "trestbps", "chol", "thalach", "oldpeak")])
+
+
+# 4. Outlier Detection (Feature-wise) and their Visualizations
+
+# Function to create box plot with outlier detection visualization
+create_boxplot <- function(df, var, title) {
+  # Outlier detection (assuming underlying numeric values for factors)
+  if (is.factor(df[[var]])) {
+    df[[paste0(var, "_numeric")]] <- as.numeric(df[[var]])
+    outliers <- grubbs.test(df[[paste0(var, "_numeric")]])$outliers
+    df <- df[!df[[paste0(var, "_numeric")]] %in% outliers, ]  # Remove outliers
+  }
+  
+  # Box plot with outliers
+  plot_outliers <- ggplot(df, aes_string(x = var)) +
+    geom_boxplot() +
+    labs(title = paste("Boxplot of", title), x = title, y = "Value") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  return(list(plot_outliers, df))
+}
+
+# List of variables and titles
+variables <- c("age", "sex", "cp", "trestbps", "chol", "fbs", "restecg", "thalach", "exang", "oldpeak", "slope", "ca", "thal", "target")
+titles <- c("Age", "Sex", "Chest Pain Type", "Resting Blood Pressure", "Cholesterol Level", "Fasting Blood Sugar", "Resting ECG", "Max Heart Rate", "Exercise Induced Angina", "ST Depression", "Slope", "CA", "Thalassemia", "Target")
+
+# Create box plots and outlier visualizations
+boxplot_list <- lapply(1:length(variables), function(i) {
+  create_boxplot(df, variables[i], titles[i])
+})
+
+# Extract box plots and data frames
+boxplot_plots <- lapply(boxplot_list, function(x) x[[1]])
+df_list <- lapply(boxplot_list, function(x) x[[2]])
+
+# Combine box plots into one grid
+boxplot_combined <- do.call(gridExtra::grid.arrange, c(boxplot_plots, ncol = 3))
+
+# Display the combined box plot grid
+print(boxplot_combined)
+
+#5. Feature Selection (Logistic Regression Techniques):  
+
+#Option 1: Recursive Feature Elimination (RFE) with Outlier Removal
+#Not implemented in this example, but can be explored if outliers are a concern.
+
+# Option 2: Feature Importance Scores from Random Forest
+
+# Check if selected features exhibit sufficient variability
+if (any(sapply(df[, selected_features], function(x) length(unique(x))) == 1)) {
+  # Deal with features with insufficient variability (e.g., remove or select different features)
+  print("Selected features have insufficient variability.")
+  selected_features <- select_different_features(df[, selected_features])
+}
+
+# Check target variable encoding is appropriate for the chosen model
+if (!is.factor(df$target)) {
+  # Convert target variable to factor with appropriate levels
+  df$target <- as.factor(df$target)
+}
+
+# Train random forest model for classification to get feature importance scores
+rf_model <- randomForest(target ~ ., data = df, ntree = 100, importance = TRUE)
+print(rf_model)  # View basic information about the model
+
+# Check if rf_model is trained properly
+print(rf_model)  # Can be used to check for errors or warnings
+
+# Inspect data and feature names
+print(colnames(df))  # Can be used to check for errors or warnings
+
+# Check importance scores calculation
+importance <- importance(rf_model)
+print(importance)   # View all importance scores
+
+# Find the index of the column corresponding to MeanDecreaseAccuracy
+mean_decrease_accuracy_index <- grep("MeanDecreaseAccuracy", colnames(importance))
+
+# Assign the top features based on importance scores to selected_features
+selected_features <- rownames(importance)[order(importance[, mean_decrease_accuracy_index], decreasing = TRUE)][1:10]
+
+# Print selected_features to verify
+print(selected_features)  # List of selected features
+
+# Advantages of Random Forest Importance Scores over Recursive Feature Elimination (RFE) for Medium Datasets:
+
+#  Less Prone to Biases: Feature selection in RFE can be biased towards the initial feature set. Random Forests are less susceptible to this bias.
+#  Handles Interactions: Random Forests can implicitly capture feature interactions that might be missed by RFE.
+#  Computational Efficiency: Random Forests can be computationally more efficient for feature selection, especially for larger datasets.
+
+  
+#6. Feature Extraction:
+# Perform PCA on the selected features to reduce dimensionality
+df[, selected_features] <- lapply(df[, selected_features], as.numeric) # Convert factors to numeric
+
+# Check if conversion was successful
+print(str(df[, selected_features]))  # View data types of the selected features
+
+# Perform scaling on numeric features
+df_scaled <- scale(df[, selected_features])
+
+# Perform PCA and capture the explained variance ratio
+pca_results <- prcomp(df_scaled, center = TRUE, scale = TRUE)
+
+# Determine the number of principal components (PCs) to retain
+# Here, we choose PCs that explain a cumulative variance of 80%
+explained_variance <- pca_results$sdev^2 / sum(pca_results$sdev^2)
+num_pcs <- which(cumsum(explained_variance) >= 0.8)[1]  # Select PCs explaining 80% variance
+
+# Extract the principal components
+pca_features <- pca_results$rotation[, 1:num_pcs]  # Select the chosen number of PCs
+
+# Use these principal components (pca_features) for further analysis or modeling
+
+# Print the number of selected principal components
+print(paste("Number of selected principal components:", num_pcs))
+
+# Print the explained variance ratio
+print(paste("Explained variance ratio by selected principal components:", sum(explained_variance[1:num_pcs])))
+
+# Print the principal components
+print(pca_features)
+
+
+#7. Descriptive Statistics:
+summary_stats <- summary(df[, selected_features])
+print(summary_stats)  # View summary statistics of the selected features
+
+
+#8. Data Visualization:
+
+# Example 1: Histogram to see the distribution of the selected numerical feature (e.g., Age)
+
+# Filter out numerical variables from the list of variables
+numeric_variables <- c("age", "trestbps", "chol", "thalach", "oldpeak")
+
+# Create a grid of histogram plots for numerical variables
+histogram_grid <- lapply(numeric_variables, function(var) {
+  ggplot(df, aes(x = .data[[var]])) +
+    geom_histogram(bins = 30, color = "lightblue") +
+    labs(title = paste("Distribution of", var), x = var, y = "Frequency")
+})
+
+# Combine all histogram plots into one grid
+histogram_combined <- do.call(gridExtra::grid.arrange, c(histogram_grid, ncol = 3))
+
+# Display the combined histogram grid
+print(histogram_combined)
+
+# Example 2: Scatter plot to explore the relationship between two features (e.g., Age vs. RestingBloodPressure)
+pairs(df[, c("age", "sex", "cp", "trestbps", "chol", "fbs", "restecg", "thalach", "exang", "oldpeak", "slope", "ca", "thal")])
+# List of variable names
+variables <- c("age", "sex", "cp", "trestbps", "chol", "fbs", "restecg", "thalach", "exang", "oldpeak", "slope", "ca", "thal")
+
+# Create scatter plots for each pair of variables
+for (i in 1:length(variables)) {
+  for (j in (i+1):length(variables)) {
+    ggplot(df, aes(x = .data[[variables[i]]], y = .data[[variables[j]]])) +
+      geom_point(alpha = 0.5) +
+      labs(title = paste(variables[i], "vs.", variables[j]),
+           x = variables[i], y = variables[j])
+  }
+}
+
+# Example 3: Bar chart to compare categorical features with the target variable (e.g., Sex vs. target_variable)
+variables <- c("sex", "cp", "fbs", "restecg", "exang", "slope", "ca", "thal")
+# Create a grid of bar plots
+barplot_grid <- lapply(variables, function(var) {
+  ggplot(df, aes(x = factor(.data[[var]]), fill = factor(target))) +
+    geom_bar(position = "dodge", alpha = 0.8) +
+    labs(title = paste("Distribution of", var), x = var, y = "Count") +
+    theme(legend.position = "top") +
+    scale_fill_manual(values = c("0" = "lightblue", "1" = "salmon"))  # Customize fill colors
+})
+
+# Combine all bar plots into one grid
+barplot_combined <- do.call(gridExtra::grid.arrange, c(barplot_grid, ncol = 3))
+
+# Display the combined bar plot grid
+print(barplot_combined)
+
+
+#9. Logistic Regression Model:
+
+# Check column names in df and pca_features
+print("Column names in df:")
+print(colnames(df))
+print("Column names in pca_features:")
+print(colnames(pca_features))
+
+# Rename columns in pca_features
+colnames(pca_features) <- colnames(df)[1:length(colnames(pca_features))]
+
+# Check if column names are aligned
+print("Column names in pca_features after renaming:")
+print(colnames(pca_features))
+
+# Build a logistic regression model using the selected features
+model <- glm(target ~ ., data = df[, c("target", colnames(pca_features))], family = binomial)
+
+
+#10. Model Evaluation:
+# Check model coefficients and summary
+summary(model) 
+# View model coefficients, significance, and overall fit
+
+# Confusion matrix for evaluation
+predicted <- predict(model, newdata = df[, colnames(pca_features)], type = "response")
+confusion_matrix <- table(df$target, predicted > 0.5)
+print(confusion_matrix)  # View true positives, negatives, etc.
+
+
+#Review 2:
+
+library(e1071)
+numerical_variables <- c("age", "sex", "cp", "trestbps", "chol", "fbs", "restecg", "thalach", "exang", "oldpeak", "slope", "ca", "thal")
+
+# Convert numerical variables to numeric
+df[numerical_variables] <- lapply(df[numerical_variables], as.numeric)
+
+# Calculate skewness and kurtosis for each numerical variable
+skewness_values <- sapply(numerical_variables, function(variable) skewness(df[[variable]], na.rm = TRUE))
+kurtosis_values <- sapply(numerical_variables, function(variable) kurtosis(df[[variable]], na.rm = TRUE))
+
+# Create a data frame for plotting
+data <- data.frame(
+  Variable = rep(numerical_variables, 2),
+  Measure = rep(c("Skewness", "Kurtosis"), each = length(numerical_variables)),
+  Value = c(skewness_values, kurtosis_values)
+)
+
+# Plot skewness and kurtosis as grouped bars
+ggplot(data, aes(x = Variable, y = Value, fill = Measure)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9), width = 0.4) +
+  labs(title = "Skewness and Kurtosis", x = "Variable", y = "Value") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+#Correlation
+# Compute correlation matrix
+correlation_matrix <- cor(df[, sapply(df, is.numeric)])
+
+# Convert correlation matrix to long format for ggplot
+correlation_melted <- melt(correlation_matrix)
+
+# Plot heatmap with annotations
+ggplot(correlation_melted, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "skyblue", mid = "white", high = "pink", midpoint = 0,
+                       breaks = c(-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1),
+                       labels = c("-1.0", "-0.75", "-0.5", "-0.25", "0.0", "0.25", "0.5", "0.75", "1.0")) +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 3) +
+  theme_minimal() +
+  labs(title = "Correlation Heatmap",
+       x = "Variables", y = "Variables",
+       fill = "Correlation") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+#Validating Results
+numerical_df <- df[, numerical_variables]
+
+# Perform k-means clustering
+set.seed(123)
+
+# Perform k-means clustering
+kmeans_model <- kmeans(df, centers = 3)
+#Why choose centers=3?
+#Ans: Interpretability, Balance between Complexity and Information, Silhouette Score, Computational Efficiency
+cluster_centers <- kmeans_model$centers
+clusters <- kmeans_model$cluster
+
+# Compute silhouette score
+silhouette_score <- silhouette(clusters, dist(df))
+
+# Convert silhouette scores to a data frame
+silhouette_df <- data.frame(cluster = silhouette_score[,1],
+                            neighbor = silhouette_score[,2],
+                            sil_width = silhouette_score[,3])
+
+# Plot silhouette width for each data point
+library(ggplot2)
+ggplot(silhouette_df, aes(x = cluster, y = sil_width, fill = as.factor(neighbor))) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("violet", "skyblue", "pink"), name = "Nearest Cluster") +
+  labs(x = "Cluster", y = "Silhouette Width") +
+  theme_minimal() +
+  ggtitle("Silhouette Width for Each Data Point")
